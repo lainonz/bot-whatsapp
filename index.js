@@ -127,32 +127,46 @@ client.on("ready", () => {
   startPolling(client, groupId);
 });
 
-// Extract clean message content from group messages
-const extractMessageContent = async (message) => {
-  if (message.fromGroup) {
-    // Get bot's contact info
-    const botContact = await client.getContactById(client.info.wid._serialized);
-
-    // Remove the bot's mention from the message using mentions data
-    if (message.mentionedIds?.includes(botContact.id._serialized)) {
-      // Get the message without mentions
-      const cleanMessage = message.body.replace(/@\d+/g, "").trim();
-      return cleanMessage;
-    }
-    return null; // Return null if bot wasn't mentioned
+// Function to check if message should be processed
+const shouldProcessMessage = async (message) => {
+  // For private chats, always process
+  if (!message.fromGroup) {
+    return {
+      shouldProcess: true,
+      cleanMessage: message.body.trim(),
+    };
   }
-  return message.body.trim();
+
+  // For group chats, check if bot is mentioned
+  const botContact = await client.getContactById(client.info.wid._serialized);
+  const isBotMentioned = message.mentionedIds?.includes(
+    botContact.id._serialized
+  );
+
+  if (!isBotMentioned) {
+    return {
+      shouldProcess: false,
+      cleanMessage: null,
+    };
+  }
+
+  // Clean the message by removing all mentions
+  let cleanMessage = message.body.replace(/@\d+/g, "").trim();
+
+  return {
+    shouldProcess: true,
+    cleanMessage,
+  };
 };
 
 // Handle incoming messages
 client.on("message", async (message) => {
   console.log(`Pesan: [${message.body}] [${message.author}]`);
 
-  // Get clean message content
-  const messageContent = await extractMessageContent(message);
+  // Check if we should process this message
+  const { shouldProcess, cleanMessage } = await shouldProcessMessage(message);
 
-  // Skip if group message without tag or if cleaning resulted in null
-  if (messageContent === null) {
+  if (!shouldProcess) {
     console.log("Pesan grup tidak ada tag bot.");
     return;
   }
@@ -166,9 +180,9 @@ client.on("message", async (message) => {
   // Handle commands
   const prefix = "/";
 
-  if (messageContent.startsWith(prefix)) {
-    const command = messageContent.slice(prefix.length).split(" ")[0];
-    const args = messageContent.slice(prefix.length + command.length).trim();
+  if (cleanMessage.startsWith(prefix)) {
+    const command = cleanMessage.slice(prefix.length).split(" ")[0];
+    const args = cleanMessage.slice(prefix.length + command.length).trim();
 
     try {
       const commandFile = require(`./commands/${command}.js`);
@@ -188,7 +202,7 @@ client.on("message", async (message) => {
     }
   } else {
     // Process message with AI
-    const reply = await getAIResponse(messageContent, conversationId);
+    const reply = await getAIResponse(cleanMessage, conversationId);
     if (!hasReplied && reply) {
       message.reply(reply);
       hasReplied = true;
