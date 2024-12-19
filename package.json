@@ -13,6 +13,7 @@
     "@huggingface/inference": "^2.8.1",
     "axios": "^1.7.9",
     "dotenv": "^16.4.7",
+    "epic-free-games": "^4.0.2",
     "moment": "^2.30.1",
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "^1.26.0"
