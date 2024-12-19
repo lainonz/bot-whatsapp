@@ -66,7 +66,7 @@ const saveChatHistory = (conversationId, history) => {
 const chatCompletionFromHuggingFace = async (message, conversationId) => {
   try {
     const chatHistory = loadChatHistory(conversationId);
-    const recentHistory = chatHistory.slice(-10);
+    const recentHistory = chatHistory.slice(-10); // Maintain sliding window
 
     const messages = [
       {
@@ -97,8 +97,11 @@ const chatCompletionFromHuggingFace = async (message, conversationId) => {
 };
 
 // Function to get response from Google Gemini (if Hugging Face fails)
-const chatCompletionFromGemini = async (message) => {
+const chatCompletionFromGemini = async (message, conversationId) => {
   try {
+    const chatHistory = loadChatHistory(conversationId); // Load Gemini chat history
+    const recentHistory = chatHistory.slice(-10); // Maintain sliding window
+
     const chatSession = model.startChat({
       generationConfig,
       history: [
@@ -106,11 +109,26 @@ const chatCompletionFromGemini = async (message) => {
           role: "user",
           parts: [{ text: message }],
         },
+        ...recentHistory.map((msg) => ({
+          role: msg.role,
+          parts: [{ text: msg.content }],
+        })),
       ],
     });
 
     const result = await chatSession.sendMessage(message);
-    return result.response.text();
+    const assistantMessage = result.response.text();
+
+    // Save the Gemini response to the history
+    chatHistory.push(
+      { role: "user", content: message, timestamp: Date.now() },
+      { role: "model", content: assistantMessage, timestamp: Date.now() }
+    );
+
+    // Save updated history
+    saveChatHistory(conversationId, chatHistory);
+
+    return assistantMessage;
   } catch (error) {
     console.error("Error fetching response from Gemini:", error.message);
     return "Maaf, aku sedang tidak bisa menjawab sekarang.";
@@ -124,7 +142,7 @@ const processMessage = async (message, conversationId) => {
   // If Hugging Face fails, fallback to Gemini
   if (!response) {
     console.log("Falling back to Gemini...");
-    response = await chatCompletionFromGemini(message);
+    response = await chatCompletionFromGemini(message, conversationId);
   }
 
   return response;
