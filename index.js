@@ -110,21 +110,57 @@ client.on("message", async (message) => {
   console.log(`Pesan: [${message.body}] [${message.author}]`);
   console.log("Pesan Grup:", message.from);
 
-  // Pastikan pesan mengandung tag untuk bot
+  // Mengatur ID grup dan pesan pribadi
+  const isGroupMessage = message.fromGroup;
   const isMentioned = message.mentionedIds.includes(
     client.info.wid._serialized
   );
 
   // Generate unique conversation ID based on context
   const userId = message.author || message.from; // Use author for group messages, from for direct messages
-  const groupId = message.fromGroup ? message.from : null;
+  const groupId = isGroupMessage ? message.from : null;
   const conversationId = generateConversationId(userId, groupId);
 
   let hasReplied = false;
 
-  // Jika bot ditag, lanjutkan untuk proses balasan
-  if (isMentioned) {
-    // Menghapus tag sebelum memproses pesan
+  // Proses jika pesan datang dari pesan pribadi
+  if (!isGroupMessage) {
+    // Pesan pribadi langsung diproses tanpa tag
+    const messageContent = message.body.trim();
+
+    // Handle commands with prefix "/"
+    const prefix = "/";
+    if (messageContent.startsWith(prefix)) {
+      const command = messageContent.slice(prefix.length).split(" ")[0];
+      const args = messageContent.slice(prefix.length + command.length).trim();
+
+      try {
+        const commandFile = require(`./commands/${command}.js`);
+        const reply = await commandFile(client, message, args);
+
+        if (!hasReplied && reply) {
+          message.reply(reply);
+          hasReplied = true;
+        }
+      } catch (error) {
+        if (!hasReplied) {
+          message.reply(
+            `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
+          );
+          hasReplied = true;
+        }
+      }
+    } else {
+      // Gunakan Hugging Face AI untuk pesan non-perintah
+      const reply = await chatCompletion(messageContent, conversationId);
+
+      if (!hasReplied && reply) {
+        message.reply(reply);
+        hasReplied = true;
+      }
+    }
+  } else if (isGroupMessage && isMentioned) {
+    // Proses jika pesan datang dari grup dan bot ditag
     const messageContent = message.body.replace(/@(\d+)/g, "").trim();
 
     // Handle commands with prefix "/"
@@ -150,7 +186,7 @@ client.on("message", async (message) => {
         }
       }
     } else {
-      // Use Hugging Face AI for non-command messages
+      // Gunakan Hugging Face AI untuk pesan non-perintah
       const reply = await chatCompletion(messageContent, conversationId);
 
       if (!hasReplied && reply) {
