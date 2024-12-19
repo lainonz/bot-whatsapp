@@ -1,40 +1,16 @@
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
-const { HfInference } = require("@huggingface/inference");
-const {
-  GoogleGenerativeAI,
-  HarmCategory,
-  HarmBlockThreshold,
-} = require("@google/generative-ai");
 const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
-const { startPolling } = require("./commands/freegame.js");
-
+const { HfInference } = require("@huggingface/inference");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 dotenv.config();
 
-// Initialize Hugging Face Client
+const CONVERSATION_DIR = path.join(__dirname, "conversation");
 const huggingface_client = new HfInference(process.env.HUGGINGFACE_TOKEN);
-
-// Initialize Google Gemini Client
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
-const model = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash-exp",
-  systemInstruction:
-    "Dirikamu adalah elysia, kamu AI canggih tapi berperilaku seperti manusia. Jawab pesan dengan singkat tapi informatif dan gunakan bahasa sehari-hari layaknya orang normal jaman sekarang.",
-});
-
-const generationConfig = {
-  temperature: 1,
-  topP: 0.95,
-  topK: 40,
-  maxOutputTokens: 8192,
-  responseMimeType: "text/plain",
-};
-
-// Directory for storing conversation histories
-const CONVERSATION_DIR = path.join(__dirname, "conversation");
 
 // Create directory if it doesn't exist
 if (!fs.existsSync(CONVERSATION_DIR)) {
@@ -59,20 +35,22 @@ const loadChatHistory = (conversationId) => {
 // Function to save chat history to JSON file
 const saveChatHistory = (conversationId, history) => {
   const filePath = path.join(CONVERSATION_DIR, `${conversationId}.json`);
-  // Make sure to handle any errors while writing to the file
+  console.log(`Menyimpan chat history ke ${filePath}`);
   try {
     fs.writeFileSync(filePath, JSON.stringify(history, null, 2), "utf-8");
+    console.log("Chat history berhasil disimpan!");
   } catch (err) {
-    console.error("Error saving chat history:", err.message);
+    console.error("Error saat menyimpan chat history:", err.message);
   }
 };
 
 // Function to get response from Hugging Face
 const chatCompletionFromHuggingFace = async (message, conversationId) => {
   try {
-    const chatHistory = loadChatHistory(conversationId);
-    const recentHistory = chatHistory.slice(-10); // Maintain sliding window
+    const chatHistory = loadChatHistory(conversationId); // Load history
+    const recentHistory = chatHistory.slice(-10); // Menyimpan riwayat pesan terbaru
 
+    // Format pesan untuk Hugging Face
     const messages = [
       {
         role: "system",
@@ -83,7 +61,7 @@ const chatCompletionFromHuggingFace = async (message, conversationId) => {
         role: msg.role,
         content: msg.content,
       })),
-      { role: "user", content: message },
+      { role: "user", content: message.body },
     ];
 
     const response = await huggingface_client.chatCompletion({
@@ -94,63 +72,77 @@ const chatCompletionFromHuggingFace = async (message, conversationId) => {
       top_p: 0.7,
     });
 
-    return response.choices[0].message.content;
-  } catch (error) {
-    console.error("Error fetching response from Hugging Face:", error.message);
-    return null; // Return null to indicate failure and fallback to Gemini
-  }
-};
+    const assistantMessage = response.choices[0].message.content;
 
-// Function to get response from Google Gemini (if Hugging Face fails)
-const chatCompletionFromGemini = async (message, conversationId) => {
-  try {
-    const chatHistory = loadChatHistory(conversationId); // Load Gemini chat history
-    const recentHistory = chatHistory.slice(-10); // Maintain sliding window
-
-    const chatSession = model.startChat({
-      generationConfig,
-      history: [
-        {
-          role: "user",
-          parts: [{ text: message }],
-        },
-        ...recentHistory.map((msg) => ({
-          role: msg.role,
-          parts: [{ text: msg.content }],
-        })),
-      ],
-    });
-
-    const result = await chatSession.sendMessage(message);
-    const assistantMessage = result.response.text();
-
-    // Save the Gemini response to the history
+    // Menambahkan pesan ke dalam history
     chatHistory.push(
-      { role: "user", content: message, timestamp: Date.now() },
-      { role: "model", content: assistantMessage, timestamp: Date.now() }
+      { role: "user", content: message.body, timestamp: Date.now() },
+      { role: "assistant", content: assistantMessage, timestamp: Date.now() }
     );
 
-    // Save updated history
+    // Simpan chat history setelah update
     saveChatHistory(conversationId, chatHistory);
 
     return assistantMessage;
   } catch (error) {
-    console.error("Error fetching response from Gemini:", error.message);
+    console.error(
+      "Error saat mendapatkan respons dari Hugging Face:",
+      error.message
+    );
     return "Maaf, aku sedang tidak bisa menjawab sekarang.";
   }
 };
 
-// Function to process incoming messages
-const processMessage = async (message, conversationId) => {
-  let response = await chatCompletionFromHuggingFace(message, conversationId);
+// Function to get response from Gemini
+const chatCompletionFromGemini = async (message, conversationId) => {
+  try {
+    const chatHistory = loadChatHistory(conversationId); // Load history
+    const recentHistory = chatHistory.slice(-10); // Menyimpan riwayat pesan terbaru
 
-  // If Hugging Face fails, fallback to Gemini
-  if (!response) {
-    console.log("Falling back to Gemini...");
-    response = await chatCompletionFromGemini(message, conversationId);
+    // Mengirim pesan ke Gemini dan mendapatkan respons
+    const chatSession = genAI
+      .getGenerativeModel({
+        model: "gemini-2.0-flash-exp",
+        systemInstruction:
+          "Dirikamu adalah elysia, kamu AI canggih tapi berperilaku seperti manusia. Jawab pesan dengan singkat tapi informatif dan gunakan bahasa sehari-hari layaknya orang normal jaman sekarang.",
+      })
+      .startChat({
+        generationConfig: {
+          temperature: 1,
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 8192,
+          responseMimeType: "text/plain",
+        },
+        history: [
+          {
+            role: "user",
+            parts: [{ text: message.body }],
+          },
+          ...recentHistory.map((msg) => ({
+            role: msg.role,
+            parts: [{ text: msg.content }],
+          })),
+        ],
+      });
+
+    const result = await chatSession.sendMessage(message.body);
+    const assistantMessage = result.response.text();
+
+    // Menambahkan pesan ke dalam history
+    chatHistory.push(
+      { role: "user", content: message.body, timestamp: Date.now() },
+      { role: "model", content: assistantMessage, timestamp: Date.now() }
+    );
+
+    // Simpan chat history setelah update
+    saveChatHistory(conversationId, chatHistory);
+
+    return assistantMessage;
+  } catch (error) {
+    console.error("Error saat mendapatkan respons dari Gemini:", error.message);
+    return "Maaf, aku sedang tidak bisa menjawab sekarang.";
   }
-
-  return response;
 };
 
 // Initialize WhatsApp Client
@@ -164,14 +156,10 @@ client.on("qr", (qr) => {
 
 client.on("ready", () => {
   console.log("Ready!");
-
-  const groupId = "120363347289234979@g.us"; // Ganti dengan ID grup sebenarnya
-  startPolling(client, groupId);
 });
 
 // Handle incoming messages
 client.on("message", async (message) => {
-  // Console log to debug
   console.log(`Pesan: [${message.body}] [${message.author}]`);
   console.log("Pesan Grup:", message.from);
 
@@ -182,36 +170,20 @@ client.on("message", async (message) => {
 
   let hasReplied = false;
 
-  // Handle commands with prefix "/"
-  const prefix = "/";
-  if (message.body.startsWith(prefix)) {
-    const command = message.body.slice(prefix.length).split(" ")[0];
-    const args = message.body.slice(prefix.length + command.length).trim();
+  // Handle messages only if tagged in group
+  if (message.fromGroup && !message.body.includes("@6289655403985")) {
+    console.log("Pesan grup tidak ada tag bot.");
+    return;
+  }
 
-    try {
-      const commandFile = require(`./commands/${command}.js`);
-      const reply = await commandFile(client, message, args);
+  // Use Hugging Face or Gemini for direct messages
+  const reply = await (process.env.USE_GEMINI === "true"
+    ? chatCompletionFromGemini(message, conversationId)
+    : chatCompletionFromHuggingFace(message, conversationId));
 
-      if (!hasReplied && reply) {
-        message.reply(reply);
-        hasReplied = true;
-      }
-    } catch (error) {
-      if (!hasReplied) {
-        message.reply(
-          `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
-        );
-        hasReplied = true;
-      }
-    }
-  } else {
-    // Use AI for non-command messages
-    const reply = await processMessage(message.body, conversationId);
-
-    if (!hasReplied && reply) {
-      message.reply(reply);
-      hasReplied = true;
-    }
+  if (!hasReplied && reply) {
+    message.reply(reply);
+    hasReplied = true;
   }
 });
 
