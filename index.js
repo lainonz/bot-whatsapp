@@ -6,20 +6,25 @@ const fs = require("fs");
 const path = require("path");
 dotenv.config();
 
-// Inisialisasi Hugging Face Client
+// Initialize Hugging Face Client
 const huggingface_client = new HfInference(process.env.HUGGINGFACE_TOKEN);
 
-// Folder untuk menyimpan riwayat percakapan
+// Directory for storing conversation histories
 const CONVERSATION_DIR = path.join(__dirname, "conversation");
 
-// Buat folder jika belum ada
+// Create directory if it doesn't exist
 if (!fs.existsSync(CONVERSATION_DIR)) {
   fs.mkdirSync(CONVERSATION_DIR);
 }
 
-// Fungsi untuk memuat riwayat percakapan dari file JSON
-const loadChatHistory = (userId) => {
-  const filePath = path.join(CONVERSATION_DIR, `${userId}.json`);
+// Function to generate a unique conversation ID for each user in each context
+const generateConversationId = (userId, groupId = null) => {
+  return groupId ? `${userId}-${groupId}` : userId;
+};
+
+// Function to load chat history from JSON file
+const loadChatHistory = (conversationId) => {
+  const filePath = path.join(CONVERSATION_DIR, `${conversationId}.json`);
   if (fs.existsSync(filePath)) {
     const data = fs.readFileSync(filePath, "utf-8");
     return JSON.parse(data);
@@ -27,30 +32,33 @@ const loadChatHistory = (userId) => {
   return [];
 };
 
-// Fungsi untuk menyimpan riwayat percakapan ke file JSON
-const saveChatHistory = (userId, history) => {
-  const filePath = path.join(CONVERSATION_DIR, `${userId}.json`);
+// Function to save chat history to JSON file
+const saveChatHistory = (conversationId, history) => {
+  const filePath = path.join(CONVERSATION_DIR, `${conversationId}.json`);
   fs.writeFileSync(filePath, JSON.stringify(history, null, 2), "utf-8");
 };
 
-// Fungsi untuk mendapatkan respons dari Hugging Face
-const chatCompletion = async (userId, userMessage) => {
+// Function to get response from Hugging Face
+const chatCompletion = async (message, conversationId) => {
   try {
-    // Muat riwayat percakapan
-    const chatHistory = loadChatHistory(userId);
+    // Load conversation history
+    const chatHistory = loadChatHistory(conversationId);
 
-    // Format pesan untuk dikirim ke Hugging Face
+    // Maintain a sliding window of recent messages (e.g., last 10 messages)
+    const recentHistory = chatHistory.slice(-10);
+
+    // Format messages for Hugging Face
     const messages = [
       {
         role: "system",
         content:
           "Dirikamu adalah elysia, kamu AI canggih tapi berperilaku seperti manusia. Jawab pesan dengan singkat tapi informatif dan gunakan bahasa sehari-hari layaknya orang normal jaman sekarang.",
       },
-      ...chatHistory.map((msg) => ({
+      ...recentHistory.map((msg) => ({
         role: msg.role,
         content: msg.content,
       })),
-      { role: "user", content: userMessage },
+      { role: "user", content: message.body },
     ];
 
     const response = await huggingface_client.chatCompletion({
@@ -63,12 +71,14 @@ const chatCompletion = async (userId, userMessage) => {
 
     const assistantMessage = response.choices[0].message.content;
 
-    // Perbarui riwayat percakapan
-    chatHistory.push({ role: "user", content: userMessage });
-    chatHistory.push({ role: "assistant", content: assistantMessage });
+    // Update conversation history
+    chatHistory.push(
+      { role: "user", content: message.body, timestamp: Date.now() },
+      { role: "assistant", content: assistantMessage, timestamp: Date.now() }
+    );
 
-    // Simpan riwayat percakapan ke file
-    saveChatHistory(userId, chatHistory);
+    // Save updated history
+    saveChatHistory(conversationId, chatHistory);
 
     return assistantMessage;
   } catch (error) {
@@ -77,7 +87,7 @@ const chatCompletion = async (userId, userMessage) => {
   }
 };
 
-// Inisialisasi WhatsApp Client
+// Initialize WhatsApp Client
 const client = new Client({
   authStrategy: new LocalAuth(),
 });
@@ -90,29 +100,27 @@ client.on("ready", () => {
   console.log("Bot WhatsApp siap digunakan!");
 });
 
-// Tangkap pesan yang diterima
-
+// Handle incoming messages
 client.on("message", async (message) => {
   console.log("Pesan diterima:", message.body);
 
-  // Identifikasi user ID (gunakan ID pengguna atau grup)
-  const userId = message.from;
+  // Generate unique conversation ID based on context
+  const userId = message.author || message.from; // Use author for group messages, from for direct messages
+  const groupId = message.fromGroup ? message.from : null;
+  const conversationId = generateConversationId(userId, groupId);
 
-  // Flag untuk melacak apakah sudah ada balasan
   let hasReplied = false;
 
-  // Periksa apakah pesan dimulai dengan prefix "/"
-  const prefix = "/"; // Prefix yang digunakan
+  // Handle commands with prefix "/"
+  const prefix = "/";
   if (message.body.startsWith(prefix)) {
-    const command = message.body.slice(prefix.length).split(" ")[0]; // Ambil perintah setelah prefix
-    const args = message.body.slice(prefix.length + command.length).trim(); // Ambil argumen setelah perintah
+    const command = message.body.slice(prefix.length).split(" ")[0];
+    const args = message.body.slice(prefix.length + command.length).trim();
 
-    // Eksekusi perintah berdasarkan nama file di folder commands
     try {
       const commandFile = require(`./commands/${command}.js`);
       const reply = await commandFile(client, message, args);
 
-      // Pastikan hanya satu balasan yang dikirim
       if (!hasReplied && reply) {
         message.reply(reply);
         hasReplied = true;
@@ -126,10 +134,9 @@ client.on("message", async (message) => {
       }
     }
   } else {
-    // Jika tidak ada prefix, gunakan Hugging Face AI untuk balasan
-    const reply = await chatCompletion(userId, message.body);
+    // Use Hugging Face AI for non-command messages
+    const reply = await chatCompletion(message, conversationId);
 
-    // Pastikan hanya satu balasan yang dikirim
     if (!hasReplied && reply) {
       message.reply(reply);
       hasReplied = true;
@@ -137,5 +144,5 @@ client.on("message", async (message) => {
   }
 });
 
-// Mulai bot
+// Start the bot
 client.initialize();
