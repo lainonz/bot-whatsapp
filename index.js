@@ -4,6 +4,7 @@ const { HfInference } = require("@huggingface/inference");
 const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
+const { startPolling } = require("./commands/freegame.js");
 dotenv.config();
 
 // Initialize Hugging Face Client
@@ -97,12 +98,17 @@ client.on("qr", (qr) => {
 });
 
 client.on("ready", () => {
-  console.log("Bot WhatsApp siap digunakan!");
+  console.log("Ready!");
+
+  const groupId = "120363347289234979@g.us"; // Ganti dengan ID grup sebenarnya
+  startPolling(client, groupId);
 });
 
 // Handle incoming messages
 client.on("message", async (message) => {
-  console.log("Pesan diterima:", message.body);
+  // console.log("Pesan diterima:", message.body, "dari ", message.author);
+  console.log(`Pesan: [${message.body}] [${message.author}]`);
+  console.log("Pesan Grup:", message.from);
 
   // Generate unique conversation ID based on context
   const userId = message.author || message.from; // Use author for group messages, from for direct messages
