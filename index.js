@@ -105,10 +105,15 @@ client.on("ready", () => {
 });
 
 // Handle incoming messages
+// Handle incoming messages
 client.on("message", async (message) => {
-  // console.log("Pesan diterima:", message.body, "dari ", message.author);
   console.log(`Pesan: [${message.body}] [${message.author}]`);
   console.log("Pesan Grup:", message.from);
+
+  // Pastikan pesan mengandung tag untuk bot
+  const isMentioned = message.mentionedIds.includes(
+    client.info.wid._serialized
+  );
 
   // Generate unique conversation ID based on context
   const userId = message.author || message.from; // Use author for group messages, from for direct messages
@@ -117,38 +122,38 @@ client.on("message", async (message) => {
 
   let hasReplied = false;
 
-  // Handle commands with prefix "/"
-  const prefix = "/";
-  if (message.body.startsWith(prefix)) {
-    const command = message.body.slice(prefix.length).split(" ")[0];
-    const args = message.body.slice(prefix.length + command.length).trim();
+  // Jika bot ditag, lanjutkan untuk proses balasan
+  if (isMentioned) {
+    // Handle commands with prefix "/"
+    const prefix = "/";
+    if (message.body.startsWith(prefix)) {
+      const command = message.body.slice(prefix.length).split(" ")[0];
+      const args = message.body.slice(prefix.length + command.length).trim();
 
-    try {
-      const commandFile = require(`./commands/${command}.js`);
-      const reply = await commandFile(client, message, args);
+      try {
+        const commandFile = require(`./commands/${command}.js`);
+        const reply = await commandFile(client, message, args);
+
+        if (!hasReplied && reply) {
+          message.reply(reply);
+          hasReplied = true;
+        }
+      } catch (error) {
+        if (!hasReplied) {
+          message.reply(
+            `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
+          );
+          hasReplied = true;
+        }
+      }
+    } else {
+      // Use Hugging Face AI for non-command messages
+      const reply = await chatCompletion(message, conversationId);
 
       if (!hasReplied && reply) {
         message.reply(reply);
         hasReplied = true;
       }
-    } catch (error) {
-      if (!hasReplied) {
-        message.reply(
-          `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
-        );
-        hasReplied = true;
-      }
-    }
-  } else {
-    // Use Hugging Face AI for non-command messages
-    const reply = await chatCompletion(message, conversationId);
-
-    if (!hasReplied && reply) {
-      message.reply(reply);
-      hasReplied = true;
     }
   }
 });
-
-// Start the bot
-client.initialize();
