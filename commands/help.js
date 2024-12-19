@@ -5,6 +5,7 @@ const helpCommand = () => {
     - /gempa: Menampilkan informasi gempa terkini
     - /googleimage: Mencari gambar di Google Image
     - /kurs: Konversi mata uang 
+    - /kbbi: Mencari kata dalam KBBI
   `;
 };
 
