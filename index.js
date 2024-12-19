@@ -132,9 +132,8 @@ const isGroupMessage = (message) => {
   return message.from.endsWith("@g.us");
 };
 
-// Function to check if message should be processed and clean it
-const processMessage = async (message) => {
-  // Check if message is from group using the chat ID
+// Function to handle AI text generation messages
+const processAIMessage = async (message) => {
   const isGroup = isGroupMessage(message);
 
   // For private chats, always process
@@ -172,14 +171,38 @@ const processMessage = async (message) => {
 client.on("message", async (message) => {
   try {
     const isGroup = isGroupMessage(message);
+    const messageContent = message.body.trim();
+    const prefix = "/";
+
     console.log(
-      `Received message: [${message.body}] from [${message.from}] in ${
+      `Received message: [${messageContent}] from [${message.from}] in ${
         isGroup ? "group" : "private"
       }`
     );
 
-    // Process and check the message
-    const { shouldProcess, cleanMessage } = await processMessage(message);
+    // Handle commands (no tag needed in group)
+    if (messageContent.startsWith(prefix)) {
+      const command = messageContent.slice(prefix.length).split(" ")[0];
+      const args = messageContent.slice(prefix.length + command.length).trim();
+
+      try {
+        const commandFile = require(`./commands/${command}.js`);
+        const reply = await commandFile(client, message, args);
+
+        if (reply) {
+          message.reply(reply);
+        }
+      } catch (error) {
+        console.error(`Command error for ${command}:`, error);
+        message.reply(
+          `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
+        );
+      }
+      return;
+    }
+
+    // Handle AI text generation (requires tag in group)
+    const { shouldProcess, cleanMessage } = await processAIMessage(message);
 
     if (!shouldProcess) {
       console.log("Skipping message - no bot mention in group chat");
@@ -190,39 +213,10 @@ client.on("message", async (message) => {
     const groupId = isGroup ? message.from : null;
     const conversationId = generateConversationId(userId, groupId);
 
-    let hasReplied = false;
-
-    // Handle commands
-    const prefix = "/";
-
-    if (cleanMessage.startsWith(prefix)) {
-      const command = cleanMessage.slice(prefix.length).split(" ")[0];
-      const args = cleanMessage.slice(prefix.length + command.length).trim();
-
-      try {
-        const commandFile = require(`./commands/${command}.js`);
-        const reply = await commandFile(client, message, args);
-
-        if (!hasReplied && reply) {
-          message.reply(reply);
-          hasReplied = true;
-        }
-      } catch (error) {
-        console.error(`Command error for ${command}:`, error);
-        if (!hasReplied) {
-          message.reply(
-            `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
-          );
-          hasReplied = true;
-        }
-      }
-    } else {
-      // Process message with AI
-      const reply = await getAIResponse(cleanMessage, conversationId);
-      if (!hasReplied && reply) {
-        message.reply(reply);
-        hasReplied = true;
-      }
+    // Process message with AI
+    const reply = await getAIResponse(cleanMessage, conversationId);
+    if (reply) {
+      message.reply(reply);
     }
   } catch (error) {
     console.error("Error processing message:", error);
