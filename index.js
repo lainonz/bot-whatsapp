@@ -124,11 +124,14 @@ client.on("message", async (message) => {
 
   // Jika bot ditag, lanjutkan untuk proses balasan
   if (isMentioned) {
+    // Menghapus tag sebelum memproses pesan
+    const messageContent = message.body.replace(/@(\d+)/g, "").trim();
+
     // Handle commands with prefix "/"
     const prefix = "/";
-    if (message.body.startsWith(prefix)) {
-      const command = message.body.slice(prefix.length).split(" ")[0];
-      const args = message.body.slice(prefix.length + command.length).trim();
+    if (messageContent.startsWith(prefix)) {
+      const command = messageContent.slice(prefix.length).split(" ")[0];
+      const args = messageContent.slice(prefix.length + command.length).trim();
 
       try {
         const commandFile = require(`./commands/${command}.js`);
@@ -148,7 +151,7 @@ client.on("message", async (message) => {
       }
     } else {
       // Use Hugging Face AI for non-command messages
-      const reply = await chatCompletion(message, conversationId);
+      const reply = await chatCompletion(messageContent, conversationId);
 
       if (!hasReplied && reply) {
         message.reply(reply);
@@ -158,5 +161,4 @@ client.on("message", async (message) => {
   }
 });
 
-// Start the bot
 client.initialize();
