@@ -127,8 +127,8 @@ client.on("ready", () => {
   startPolling(client, groupId);
 });
 
-// Function to check if message should be processed
-const shouldProcessMessage = async (message) => {
+// Function to check if message should be processed and clean it
+const processMessage = async (message) => {
   // For private chats, always process
   if (!message.fromGroup) {
     return {
@@ -138,75 +138,86 @@ const shouldProcessMessage = async (message) => {
   }
 
   // For group chats, check if bot is mentioned
-  const botContact = await client.getContactById(client.info.wid._serialized);
-  const isBotMentioned = message.mentionedIds?.includes(
-    botContact.id._serialized
-  );
+  const botInfo = await client.getContactById(client.info.wid._serialized);
 
-  if (!isBotMentioned) {
+  // Check if message contains @ mention for the bot
+  if (message.mentionedIds?.includes(botInfo.id._serialized)) {
+    // Remove the mention and any leading/trailing whitespace
+    const cleanMessage = message.body
+      .replace(new RegExp(`@${botInfo.id.user}\\s*`, "g"), "")
+      .trim();
+
     return {
-      shouldProcess: false,
-      cleanMessage: null,
+      shouldProcess: true,
+      cleanMessage,
     };
   }
 
-  // Clean the message by removing all mentions
-  let cleanMessage = message.body.replace(/@\d+/g, "").trim();
-
+  // No mention in group chat
   return {
-    shouldProcess: true,
-    cleanMessage,
+    shouldProcess: false,
+    cleanMessage: null,
   };
 };
 
 // Handle incoming messages
 client.on("message", async (message) => {
-  console.log(`Pesan: [${message.body}] [${message.author}]`);
+  try {
+    console.log(
+      `Received message: [${message.body}] from [${message.from}] in ${
+        message.fromGroup ? "group" : "private"
+      }`
+    );
 
-  // Check if we should process this message
-  const { shouldProcess, cleanMessage } = await shouldProcessMessage(message);
+    // Process and check the message
+    const { shouldProcess, cleanMessage } = await processMessage(message);
 
-  if (!shouldProcess) {
-    console.log("Pesan grup tidak ada tag bot.");
-    return;
-  }
+    if (!shouldProcess) {
+      console.log("Skipping message - no bot mention in group chat");
+      return;
+    }
 
-  const userId = message.author || message.from;
-  const groupId = message.fromGroup ? message.from : null;
-  const conversationId = generateConversationId(userId, groupId);
+    const userId = message.author || message.from;
+    const groupId = message.fromGroup ? message.from : null;
+    const conversationId = generateConversationId(userId, groupId);
 
-  let hasReplied = false;
+    let hasReplied = false;
 
-  // Handle commands
-  const prefix = "/";
+    // Handle commands
+    const prefix = "/";
 
-  if (cleanMessage.startsWith(prefix)) {
-    const command = cleanMessage.slice(prefix.length).split(" ")[0];
-    const args = cleanMessage.slice(prefix.length + command.length).trim();
+    if (cleanMessage.startsWith(prefix)) {
+      const command = cleanMessage.slice(prefix.length).split(" ")[0];
+      const args = cleanMessage.slice(prefix.length + command.length).trim();
 
-    try {
-      const commandFile = require(`./commands/${command}.js`);
-      const reply = await commandFile(client, message, args);
+      try {
+        const commandFile = require(`./commands/${command}.js`);
+        const reply = await commandFile(client, message, args);
 
+        if (!hasReplied && reply) {
+          message.reply(reply);
+          hasReplied = true;
+        }
+      } catch (error) {
+        console.error(`Command error for ${command}:`, error);
+        if (!hasReplied) {
+          message.reply(
+            `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
+          );
+          hasReplied = true;
+        }
+      }
+    } else {
+      // Process message with AI
+      const reply = await getAIResponse(cleanMessage, conversationId);
       if (!hasReplied && reply) {
         message.reply(reply);
         hasReplied = true;
       }
-    } catch (error) {
-      if (!hasReplied) {
-        message.reply(
-          `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
-        );
-        hasReplied = true;
-      }
     }
-  } else {
-    // Process message with AI
-    const reply = await getAIResponse(cleanMessage, conversationId);
-    if (!hasReplied && reply) {
-      message.reply(reply);
-      hasReplied = true;
-    }
+  } catch (error) {
+    console.error("Error processing message:", error);
+    message.reply("Maaf, terjadi kesalahan dalam memproses pesan.");
   }
 });
 
