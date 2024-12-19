@@ -127,10 +127,18 @@ client.on("ready", () => {
   startPolling(client, groupId);
 });
 
+// Function to check if message is from group
+const isGroupMessage = (message) => {
+  return message.from.endsWith("@g.us");
+};
+
 // Function to check if message should be processed and clean it
 const processMessage = async (message) => {
+  // Check if message is from group using the chat ID
+  const isGroup = isGroupMessage(message);
+
   // For private chats, always process
-  if (!message.fromGroup) {
+  if (!isGroup) {
     return {
       shouldProcess: true,
       cleanMessage: message.body.trim(),
@@ -163,9 +171,10 @@ const processMessage = async (message) => {
 // Handle incoming messages
 client.on("message", async (message) => {
   try {
+    const isGroup = isGroupMessage(message);
     console.log(
       `Received message: [${message.body}] from [${message.from}] in ${
-        message.fromGroup ? "group" : "private"
+        isGroup ? "group" : "private"
       }`
     );
 
@@ -178,7 +187,7 @@ client.on("message", async (message) => {
     }
 
     const userId = message.author || message.from;
-    const groupId = message.fromGroup ? message.from : null;
+    const groupId = isGroup ? message.from : null;
     const conversationId = generateConversationId(userId, groupId);
 
     let hasReplied = false;
