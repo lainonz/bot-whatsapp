@@ -59,7 +59,12 @@ const loadChatHistory = (conversationId) => {
 // Function to save chat history to JSON file
 const saveChatHistory = (conversationId, history) => {
   const filePath = path.join(CONVERSATION_DIR, `${conversationId}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(history, null, 2), "utf-8");
+  // Make sure to handle any errors while writing to the file
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(history, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Error saving chat history:", err.message);
+  }
 };
 
 // Function to get response from Hugging Face
