@@ -1,14 +1,37 @@
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const { HfInference } = require("@huggingface/inference");
+const {
+  GoogleGenerativeAI,
+  HarmCategory,
+  HarmBlockThreshold,
+} = require("@google/generative-ai");
 const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
 const { startPolling } = require("./commands/freegame.js");
+
 dotenv.config();
 
 // Initialize Hugging Face Client
 const huggingface_client = new HfInference(process.env.HUGGINGFACE_TOKEN);
+
+// Initialize Google Gemini Client
+const apiKey = process.env.GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(apiKey);
+const model = genAI.getGenerativeModel({
+  model: "gemini-2.0-flash-exp",
+  systemInstruction:
+    "Dirikamu adalah elysia, kamu AI canggih tapi berperilaku seperti manusia. Jawab pesan dengan singkat tapi informatif dan gunakan bahasa sehari-hari layaknya orang normal jaman sekarang.",
+});
+
+const generationConfig = {
+  temperature: 1,
+  topP: 0.95,
+  topK: 40,
+  maxOutputTokens: 8192,
+  responseMimeType: "text/plain",
+};
 
 // Directory for storing conversation histories
 const CONVERSATION_DIR = path.join(__dirname, "conversation");
@@ -40,15 +63,11 @@ const saveChatHistory = (conversationId, history) => {
 };
 
 // Function to get response from Hugging Face
-const chatCompletion = async (message, conversationId) => {
+const chatCompletionFromHuggingFace = async (message, conversationId) => {
   try {
-    // Load conversation history
     const chatHistory = loadChatHistory(conversationId);
-
-    // Maintain a sliding window of recent messages (e.g., last 10 messages)
     const recentHistory = chatHistory.slice(-10);
 
-    // Format messages for Hugging Face
     const messages = [
       {
         role: "system",
@@ -59,7 +78,7 @@ const chatCompletion = async (message, conversationId) => {
         role: msg.role,
         content: msg.content,
       })),
-      { role: "user", content: message.body },
+      { role: "user", content: message },
     ];
 
     const response = await huggingface_client.chatCompletion({
@@ -70,22 +89,45 @@ const chatCompletion = async (message, conversationId) => {
       top_p: 0.7,
     });
 
-    const assistantMessage = response.choices[0].message.content;
-
-    // Update conversation history
-    chatHistory.push(
-      { role: "user", content: message.body, timestamp: Date.now() },
-      { role: "assistant", content: assistantMessage, timestamp: Date.now() }
-    );
-
-    // Save updated history
-    saveChatHistory(conversationId, chatHistory);
-
-    return assistantMessage;
+    return response.choices[0].message.content;
   } catch (error) {
     console.error("Error fetching response from Hugging Face:", error.message);
+    return null; // Return null to indicate failure and fallback to Gemini
+  }
+};
+
+// Function to get response from Google Gemini (if Hugging Face fails)
+const chatCompletionFromGemini = async (message) => {
+  try {
+    const chatSession = model.startChat({
+      generationConfig,
+      history: [
+        {
+          role: "user",
+          parts: [{ text: message }],
+        },
+      ],
+    });
+
+    const result = await chatSession.sendMessage(message);
+    return result.response.text();
+  } catch (error) {
+    console.error("Error fetching response from Gemini:", error.message);
     return "Maaf, aku sedang tidak bisa menjawab sekarang.";
   }
+};
+
+// Function to process incoming messages
+const processMessage = async (message, conversationId) => {
+  let response = await chatCompletionFromHuggingFace(message, conversationId);
+
+  // If Hugging Face fails, fallback to Gemini
+  if (!response) {
+    console.log("Falling back to Gemini...");
+    response = await chatCompletionFromGemini(message);
+  }
+
+  return response;
 };
 
 // Initialize WhatsApp Client
@@ -105,96 +147,50 @@ client.on("ready", () => {
 });
 
 // Handle incoming messages
-// Handle incoming messages
 client.on("message", async (message) => {
+  // Console log to debug
   console.log(`Pesan: [${message.body}] [${message.author}]`);
   console.log("Pesan Grup:", message.from);
 
-  // Mengatur ID grup dan pesan pribadi
-  const isGroupMessage = message.fromGroup;
-  const isMentioned = message.mentionedIds.includes(
-    client.info.wid._serialized
-  );
-
   // Generate unique conversation ID based on context
   const userId = message.author || message.from; // Use author for group messages, from for direct messages
-  const groupId = isGroupMessage ? message.from : null;
+  const groupId = message.fromGroup ? message.from : null;
   const conversationId = generateConversationId(userId, groupId);
 
   let hasReplied = false;
 
-  // Proses jika pesan datang dari pesan pribadi
-  if (!isGroupMessage) {
-    // Pesan pribadi langsung diproses tanpa tag
-    const messageContent = message.body.trim();
+  // Handle commands with prefix "/"
+  const prefix = "/";
+  if (message.body.startsWith(prefix)) {
+    const command = message.body.slice(prefix.length).split(" ")[0];
+    const args = message.body.slice(prefix.length + command.length).trim();
 
-    // Handle commands with prefix "/"
-    const prefix = "/";
-    if (messageContent.startsWith(prefix)) {
-      const command = messageContent.slice(prefix.length).split(" ")[0];
-      const args = messageContent.slice(prefix.length + command.length).trim();
-
-      try {
-        const commandFile = require(`./commands/${command}.js`);
-        const reply = await commandFile(client, message, args);
-
-        if (!hasReplied && reply) {
-          message.reply(reply);
-          hasReplied = true;
-        }
-      } catch (error) {
-        if (!hasReplied) {
-          message.reply(
-            `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
-          );
-          hasReplied = true;
-        }
-      }
-    } else {
-      // Gunakan Hugging Face AI untuk pesan non-perintah
-      const reply = await chatCompletion(messageContent, conversationId);
+    try {
+      const commandFile = require(`./commands/${command}.js`);
+      const reply = await commandFile(client, message, args);
 
       if (!hasReplied && reply) {
         message.reply(reply);
+        hasReplied = true;
+      }
+    } catch (error) {
+      if (!hasReplied) {
+        message.reply(
+          `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
+        );
         hasReplied = true;
       }
     }
-  } else if (isGroupMessage && isMentioned) {
-    // Proses jika pesan datang dari grup dan bot ditag
-    const messageContent = message.body.replace(/@(\d+)/g, "").trim();
+  } else {
+    // Use AI for non-command messages
+    const reply = await processMessage(message.body, conversationId);
 
-    // Handle commands with prefix "/"
-    const prefix = "/";
-    if (messageContent.startsWith(prefix)) {
-      const command = messageContent.slice(prefix.length).split(" ")[0];
-      const args = messageContent.slice(prefix.length + command.length).trim();
-
-      try {
-        const commandFile = require(`./commands/${command}.js`);
-        const reply = await commandFile(client, message, args);
-
-        if (!hasReplied && reply) {
-          message.reply(reply);
-          hasReplied = true;
-        }
-      } catch (error) {
-        if (!hasReplied) {
-          message.reply(
-            `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
-          );
-          hasReplied = true;
-        }
-      }
-    } else {
-      // Gunakan Hugging Face AI untuk pesan non-perintah
-      const reply = await chatCompletion(messageContent, conversationId);
-
-      if (!hasReplied && reply) {
-        message.reply(reply);
-        hasReplied = true;
-      }
+    if (!hasReplied && reply) {
+      message.reply(reply);
+      hasReplied = true;
     }
   }
 });
 
+// Start the bot
 client.initialize();
