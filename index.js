@@ -5,12 +5,16 @@ const fs = require("fs");
 const path = require("path");
 const { HfInference } = require("@huggingface/inference");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { startPolling } = require("./commands/freegame.js");
 dotenv.config();
 
-const CONVERSATION_DIR = path.join(__dirname, "conversation");
+// Initialize Hugging Face Client
 const huggingface_client = new HfInference(process.env.HUGGINGFACE_TOKEN);
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
+
+// Directory for storing conversation histories
+const CONVERSATION_DIR = path.join(__dirname, "conversation");
 
 // Create directory if it doesn't exist
 if (!fs.existsSync(CONVERSATION_DIR)) {
@@ -35,13 +39,7 @@ const loadChatHistory = (conversationId) => {
 // Function to save chat history to JSON file
 const saveChatHistory = (conversationId, history) => {
   const filePath = path.join(CONVERSATION_DIR, `${conversationId}.json`);
-  console.log(`Menyimpan chat history ke ${filePath}`);
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(history, null, 2), "utf-8");
-    console.log("Chat history berhasil disimpan!");
-  } catch (err) {
-    console.error("Error saat menyimpan chat history:", err.message);
-  }
+  fs.writeFileSync(filePath, JSON.stringify(history, null, 2), "utf-8");
 };
 
 // Function to get response from Hugging Face
@@ -156,6 +154,8 @@ client.on("qr", (qr) => {
 
 client.on("ready", () => {
   console.log("Ready!");
+  const groupId = "120363347289234979@g.us"; // Ganti dengan ID grup sebenarnya
+  startPolling(client, groupId);
 });
 
 // Handle incoming messages
@@ -176,16 +176,40 @@ client.on("message", async (message) => {
     return;
   }
 
-  // Use Hugging Face or Gemini for direct messages
-  const reply = await (process.env.USE_GEMINI === "true"
-    ? chatCompletionFromGemini(message, conversationId)
-    : chatCompletionFromHuggingFace(message, conversationId));
+  // Handle commands
+  const messageContent = message.body.trim();
+  const prefix = "/";
+  if (messageContent.startsWith(prefix)) {
+    const command = messageContent.slice(prefix.length).split(" ")[0];
+    const args = messageContent.slice(prefix.length + command.length).trim();
 
-  if (!hasReplied && reply) {
-    message.reply(reply);
-    hasReplied = true;
+    try {
+      const commandFile = require(`./commands/${command}.js`);
+      const reply = await commandFile(client, message, args);
+
+      if (!hasReplied && reply) {
+        message.reply(reply);
+        hasReplied = true;
+      }
+    } catch (error) {
+      if (!hasReplied) {
+        message.reply(
+          `Perintah "${command}" tidak dikenali. Ketik /help untuk bantuan.`
+        );
+        hasReplied = true;
+      }
+    }
+  } else {
+    // Use Hugging Face or Gemini for normal messages
+    const reply = await (process.env.USE_GEMINI === "true"
+      ? chatCompletionFromGemini(message, conversationId)
+      : chatCompletionFromHuggingFace(message, conversationId));
+
+    if (!hasReplied && reply) {
+      message.reply(reply);
+      hasReplied = true;
+    }
   }
 });
 
-// Start the bot
 client.initialize();
